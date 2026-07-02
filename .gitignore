@@ -209,3 +209,7 @@ docs/plans
 # Claude Code
 .claude/scheduled_tasks.lock
 /target-linux-amd64
+
+# Murmur local config (per-developer, not checked in)
+.murmur/murmur.local.yaml
+.murmur/murmur.*.local.yaml
