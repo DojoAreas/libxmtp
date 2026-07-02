@@ -261,6 +261,28 @@ workspace tests and generate both an lcov and html report.
 If you have installed the `Coverage Gutters` extension in vscode (or a
 derivative) you can get coverage information in your IDE.
 
+## Using Murmur
+
+[Murmur](https://cloud.murmur.dev) is an AI-powered dev agent platform that spawns Claude Code agents directly on GitHub repos. You can use it to work on libxmtp without setting up a local environment.
+
+### Getting started
+
+1. Visit [https://cloud.murmur.dev](https://cloud.murmur.dev) and sign in with your GitHub account.
+2. Connect your GitHub and grant access to the DojoAreas/libxmtp repo (or your fork).
+3. Spawn an agent on this repo and describe the task you want done.
+
+### What agents can help with
+
+- Fixing bugs and implementing new features
+- Code review and refactoring suggestions
+- Running CI checks and interpreting test failures
+- Updating documentation
+- Exploring the codebase and answering questions about how it works
+
+### How it works
+
+Agents work on isolated branches and open pull requests for human review — no code is merged directly. Every change goes through the normal PR process, so you stay in control of what lands in the codebase.
+
 ## Contributing
 
 See our [contribution guide](./CONTRIBUTING.md) to learn more about contributing
