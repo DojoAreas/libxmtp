@@ -297,6 +297,12 @@ pub mod update_metadata_data {
         pub field_name: ::prost::alloc::string::String,
         #[prost(string, tag = "2")]
         pub field_value: ::prost::alloc::string::String,
+        /// Compare-and-swap guard. When set, the publisher must abandon this
+        /// intent unless the field's currently committed value equals this,
+        /// rather than overwriting whatever landed in the meantime. Absent
+        /// means last-writer-wins, which is the historical behavior.
+        #[prost(string, optional, tag = "3")]
+        pub expected_field_value: ::core::option::Option<::prost::alloc::string::String>,
     }
     impl ::prost::Name for V1 {
         const NAME: &'static str = "V1";
@@ -783,7 +789,7 @@ impl PermissionPolicyOption {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Task {
-    #[prost(oneof = "task::Task", tags = "1, 2, 3")]
+    #[prost(oneof = "task::Task", tags = "1, 2, 3, 4, 5, 6, 7, 8")]
     pub task: ::core::option::Option<task::Task>,
 }
 /// Nested message and enum types in `Task`.
@@ -796,6 +802,16 @@ pub mod task {
         SendSyncArchive(super::SendSyncArchive),
         #[prost(message, tag = "3")]
         ProcessPendingSelfRemove(super::ProcessPendingSelfRemove),
+        #[prost(message, tag = "4")]
+        PullInDeadline(super::PullInDeadline),
+        #[prost(message, tag = "5")]
+        KpRotation(super::KpRotation),
+        #[prost(message, tag = "6")]
+        KpDeletion(super::KpDeletion),
+        #[prost(message, tag = "7")]
+        AddMissingInstallations(super::AddMissingInstallations),
+        #[prost(message, tag = "8")]
+        KpLiveness(super::KpLiveness),
     }
 }
 impl ::prost::Name for Task {
@@ -806,6 +822,78 @@ impl ::prost::Name for Task {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/xmtp.mls.database.Task".into()
+    }
+}
+/// Lower a target task's next-attempt deadline so it runs sooner. One-shot:
+/// applied by the TaskWorker, then deleted.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PullInDeadline {
+    /// The UNIQUE data_hash identifying the target task row.
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_data_hash: ::prost::alloc::vec::Vec<u8>,
+    /// Target's next_attempt_at_ns is set to MIN(current, this).
+    #[prost(int64, tag = "2")]
+    pub not_later_than_ns: i64,
+}
+impl ::prost::Name for PullInDeadline {
+    const NAME: &'static str = "PullInDeadline";
+    const PACKAGE: &'static str = "xmtp.mls.database";
+    fn full_name() -> ::prost::alloc::string::String {
+        "xmtp.mls.database.PullInDeadline".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/xmtp.mls.database.PullInDeadline".into()
+    }
+}
+/// Recurring singleton: rotate + upload a fresh key package when the identity's
+/// rotation deadline is due. Empty payload => stable data_hash for pull-ins.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct KpRotation {}
+impl ::prost::Name for KpRotation {
+    const NAME: &'static str = "KpRotation";
+    const PACKAGE: &'static str = "xmtp.mls.database";
+    fn full_name() -> ::prost::alloc::string::String {
+        "xmtp.mls.database.KpRotation".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/xmtp.mls.database.KpRotation".into()
+    }
+}
+/// Recurring singleton: delete superseded local key-package material whose
+/// delete_at_ns has passed. Empty payload => stable data_hash for pull-ins.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct KpDeletion {}
+impl ::prost::Name for KpDeletion {
+    const NAME: &'static str = "KpDeletion";
+    const PACKAGE: &'static str = "xmtp.mls.database";
+    fn full_name() -> ::prost::alloc::string::String {
+        "xmtp.mls.database.KpDeletion".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/xmtp.mls.database.KpDeletion".into()
+    }
+}
+/// Recurring singleton: verify that THIS installation still has a usable key
+/// package published on the network, and queue a rotation when it does not.
+///
+/// Distinct from KpRotation on purpose. Rotation is driven by a local deadline
+/// column; if that column is ever wrong the client stops rotating, its published
+/// key package expires, and it becomes permanently unreachable (added to groups
+/// only as a failed installation, so it never receives a welcome and never gets
+/// the welcome-driven rotation nudge either) without observing any local error.
+/// Liveness is the independent watchdog for that closed loop: its own schedule,
+/// its own retry/backoff, and a network probe rather than a local deadline as
+/// its source of truth. Empty payload => stable data_hash for pull-ins.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct KpLiveness {}
+impl ::prost::Name for KpLiveness {
+    const NAME: &'static str = "KpLiveness";
+    const PACKAGE: &'static str = "xmtp.mls.database";
+    fn full_name() -> ::prost::alloc::string::String {
+        "xmtp.mls.database.KpLiveness".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/xmtp.mls.database.KpLiveness".into()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -847,5 +935,26 @@ impl ::prost::Name for ProcessPendingSelfRemove {
     }
     fn type_url() -> ::prost::alloc::string::String {
         "/xmtp.mls.database.ProcessPendingSelfRemove".into()
+    }
+}
+/// Durable TaskRunner intent: reconcile a group's membership with the inbox's
+/// latest identity state (add installations registered after the group was
+/// last updated). Enqueued by the device-sync worker when a sync-group welcome
+/// signals a new installation; runs on the TaskRunner with retry/backoff so a
+/// transient failure (e.g. identity propagation lag) cannot permanently skip
+/// the add. group_id is the target conversation.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AddMissingInstallations {
+    #[prost(bytes = "vec", tag = "1")]
+    pub group_id: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for AddMissingInstallations {
+    const NAME: &'static str = "AddMissingInstallations";
+    const PACKAGE: &'static str = "xmtp.mls.database";
+    fn full_name() -> ::prost::alloc::string::String {
+        "xmtp.mls.database.AddMissingInstallations".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/xmtp.mls.database.AddMissingInstallations".into()
     }
 }
